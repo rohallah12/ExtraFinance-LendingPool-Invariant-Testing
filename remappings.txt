@@ -1,0 +1,7 @@
+forge-std/=lib/forge-std/src/
+contracts/lendingpool/=src/lendingpool/
+contracts/libraries/=src/libraries/
+contracts/Payments.sol/=src/Payments.sol/
+contracts/external/=src/external/
+contracts/interfaces/=src/interfaces/
+contracts/AddressRegistry.sol/=src/AddressRegistry.sol/
