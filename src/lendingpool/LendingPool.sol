@@ -59,21 +59,28 @@ contract LendingPool is ILendingPool, Ownable, Payments, ReentrancyGuard {
         addressRegistry = _addressRegistry;
     }
 
-    /// @notice initialize a reserve pool for an asset
+    /*
+     1- if paused dont work
+     2- if not owner dont work
+     3- nextReserveId must increase
+     4- must active borrowing
+    */
     function initReserve(address asset) external onlyOwner notPaused {
         uint256 id = nextReserveId;
         nextReserveId += 1;
 
-        // new a eToken contract
+        // new a eToken contract (-_(-_(-_-)-_)_-)
         string memory name = string(
             abi.encodePacked(
                 ERC20(asset).name(),
                 "(ExtraFi Interest Bearing Token)"
             )
         );
+
         string memory symbol = string(
             abi.encodePacked("e", ERC20(asset).symbol())
         );
+
         uint8 decimals = ERC20(asset).decimals();
 
         address eTokenAddress = ETokenDeployer.deploy(
@@ -88,8 +95,10 @@ contract LendingPool is ILendingPool, Ownable, Payments, ReentrancyGuard {
         reserveData.setActive(true);
         reserveData.setBorrowingEnabled(true);
 
+        //set reserveData
         initReserve(reserveData, asset, eTokenAddress, type(uint256).max, id);
 
+        //create a staking contract and transfer its ownership to owner of this contract
         createStakingPoolForReserve(id);
 
         emit InitReserve(asset, eTokenAddress, reserveData.stakingAddress, id);
@@ -107,6 +116,11 @@ contract LendingPool is ILendingPool, Ownable, Payments, ReentrancyGuard {
      * @param referralCode Code used to register the integrator originating the operation, for potential rewards.
      *   0 if the action is executed directly by the user, without any middle-man
      **/
+    //deposit => transfer asset to reserve => (asset * reserve) / totalAsset
+    //withdraw => reserve * totalAsset / totalReserve
+    /**
+     *
+     */
     function deposit(
         uint256 reserveId,
         uint256 amount,
@@ -174,6 +188,7 @@ contract LendingPool is ILendingPool, Ownable, Payments, ReentrancyGuard {
      * @param receiveNativeETH If receive native ETH, set this param to true
      * @return The underlying token amount user finally receive
      **/
+    //note can be called by anyone
     function redeem(
         uint256 reserveId,
         uint256 eTokenAmount,
@@ -184,16 +199,20 @@ contract LendingPool is ILendingPool, Ownable, Payments, ReentrancyGuard {
         payable
         notPaused
         nonReentrant
-        avoidUsingNativeEther
+        avoidUsingNativeEther //note do not accept ether
         returns (uint256)
     {
+        //get the reserve from storage
         DataTypes.ReserveData storage reserve = getReserve(reserveId);
 
+        //check if eTokenAmount is maximum, if so, set it to balance
         if (eTokenAmount == type(uint256).max) {
             eTokenAmount = IExtraInterestBearingToken(reserve.eTokenAddress)
                 .balanceOf(_msgSender());
         }
+
         // transfer eTokens to this contract
+        //transfer tokens from msg.sender to this contract
         IERC20(reserve.eTokenAddress).safeTransferFrom(
             _msgSender(),
             address(this),
@@ -201,6 +220,7 @@ contract LendingPool is ILendingPool, Ownable, Payments, ReentrancyGuard {
         );
 
         // calculate underlying tokens using eTokens
+        //calculate underlyingAmount using current rate and
         uint256 underlyingTokenAmount = _redeem(
             reserveId,
             eTokenAmount,
@@ -268,13 +288,19 @@ contract LendingPool is ILendingPool, Ownable, Payments, ReentrancyGuard {
         DataTypes.ReserveData storage reserve = getReserve(reserveId);
         require(!reserve.getFrozen(), Errors.VL_RESERVE_FROZEN);
         // update states
+        //does affect the totalSupply => price
         reserve.updateState(getTreasury());
 
         // validate
         reserve.checkCapacity(amount);
 
+        //100 asset
+        //200 etoken
+        //price = 0.5$ per etoken
+        // reserve / totalAsset
         uint256 exchangeRate = reserve.reserveToETokenExchangeRate();
 
+        //1000 asset => 1000 / 0.5 => 2000 etoken
         // Transfer the user's reserve token to eToken contract
         pay(
             reserve.underlyingTokenAddress,
@@ -282,6 +308,8 @@ contract LendingPool is ILendingPool, Ownable, Payments, ReentrancyGuard {
             reserve.eTokenAddress,
             amount
         );
+        //1100 asset
+        //2200 etoken
 
         // Mint eTokens for the user
         eTokenAmount = amount.mul(exchangeRate).div(Precision.FACTOR1E18);
@@ -295,33 +323,48 @@ contract LendingPool is ILendingPool, Ownable, Payments, ReentrancyGuard {
         reserve.updateInterestRates();
     }
 
+    //since we are removing proportional the price should not change to be used for arbitragin
+    //but, is there a way to remove one of tokens and use the price change
     function _redeem(
         uint256 reserveId,
         uint256 eTokenAmount,
         address to,
         bool receiveNativeETH
     ) internal returns (uint256) {
+        //get the reserve from storage
         DataTypes.ReserveData storage reserve = getReserve(reserveId);
         // update states
-        reserve.updateState(getTreasury());
+        //update state
+        reserve.updateState(getTreasury()); //decrease price
 
         // calculate underlying tokens using eTokens
-        uint256 underlyingTokenAmount = reserve
+        //reserves reduce
+        //total supply reduce
+        uint256 underlyingTokenAmount = reserve //receive less tokens
             .eTokenToReserveExchangeRate()
             .mul(eTokenAmount)
             .div(Precision.FACTOR1E18);
 
+        //100 asset 200 e
+        //100/200 => 0.5
+        //200 / 0.5 => 400
+
+        //300 600
+
+        //must be less than available
         require(
             underlyingTokenAmount <= reserve.availableLiquidity(),
             Errors.VL_CURRENT_AVAILABLE_LIQUIDITY_NOT_ENOUGH
         );
 
         if (reserve.underlyingTokenAddress == WETH9 && receiveNativeETH) {
+            //if underlying is WETH9 then unwrap and send
             IExtraInterestBearingToken(reserve.eTokenAddress).burn(
                 address(this),
                 eTokenAmount,
                 underlyingTokenAmount
             );
+            //send ether
             unwrapWETH9(underlyingTokenAmount, to);
         } else {
             // burn eTokens and transfer the underlying tokens to receiver
@@ -333,6 +376,7 @@ contract LendingPool is ILendingPool, Ownable, Payments, ReentrancyGuard {
         }
 
         // update the interest rate after the redeem
+        //updatea the borrowingRate based on the utilization ratio
         reserve.updateInterestRates();
 
         return (underlyingTokenAmount);
@@ -366,16 +410,20 @@ contract LendingPool is ILendingPool, Ownable, Payments, ReentrancyGuard {
      * @param debtId The debtPositionId
      * @param amount The amount to be borrowed
      */
+    /**
+     * 1- validate that debtID belongs to msg.sender
+     * 2- validate that the reserve is not freezed and is enabled
+     * 3- update reserve stats such as totalBorrow (+ interets)
+     * 4- check if has enough credit for borrowing
+     * 5- transfer tokens to borrower
+     */
+    //@audit-info onBehalfOf not used here?
+    //@audit-info is it possible to deposit borrowed tokens back to vault? and ruin something
     function borrow(
         address onBehalfOf,
         uint256 debtId,
         uint256 amount
     ) external notPaused nonReentrant {
-        require(
-            borrowingWhiteList[_msgSender()],
-            Errors.VL_BORROWING_CALLER_NOT_IN_WHITELIST
-        );
-
         DataTypes.DebtPositionData storage debtPosition = debtPositions[debtId];
         require(
             _msgSender() == debtPosition.owner,
@@ -389,12 +437,13 @@ contract LendingPool is ILendingPool, Ownable, Payments, ReentrancyGuard {
         require(reserve.getBorrowingEnabled(), Errors.VL_BORROWING_NOT_ENABLED);
 
         // update states
-        reserve.updateState(getTreasury());
-        updateDebtPosition(debtPosition, reserve.borrowingIndex);
+        reserve.updateState(getTreasury()); //totalBorrowed updated
+        updateDebtPosition(debtPosition, reserve.borrowingIndex); //updated with index
 
         // only vault contract has credits to borrow tokens
         // when this function is called from the vault contracts,
         // the _msgSender() is the vault's address
+        //@audit-info available liquidity to borrow from a reserve
         uint256 credit = credits[debtPosition.reserveId][_msgSender()];
         require(amount <= credit, Errors.VL_OUT_OF_CREDITS);
         credits[debtPosition.reserveId][_msgSender()] = credit.sub(amount);
@@ -411,6 +460,8 @@ contract LendingPool is ILendingPool, Ownable, Payments, ReentrancyGuard {
             amount
         );
 
+        //note first time borrowing, only enter this and update interests
+        //based on utilization ratio
         reserve.updateInterestRates();
 
         emit Borrow(debtPosition.reserveId, _msgSender(), onBehalfOf, amount);
@@ -425,16 +476,14 @@ contract LendingPool is ILendingPool, Ownable, Payments, ReentrancyGuard {
      * @param amount The amount to be borrowed
      * @return The final amount repaid
      **/
+    //@audit if reserve is freezed (e.g. security reasons) its possible to still send tokens to the reserve eToken
+    //@audit-info is it possible to repay before borrowing any tokens?
+    //@audit-info is it possible to not updateDebtPosition
     function repay(
         address onBehalfOf,
         uint256 debtId,
         uint256 amount
     ) external notPaused nonReentrant returns (uint256) {
-        require(
-            borrowingWhiteList[_msgSender()],
-            Errors.VL_BORROWING_CALLER_NOT_IN_WHITELIST
-        );
-
         DataTypes.DebtPositionData storage debtPosition = debtPositions[debtId];
         require(
             _msgSender() == debtPosition.owner,
@@ -447,6 +496,7 @@ contract LendingPool is ILendingPool, Ownable, Payments, ReentrancyGuard {
 
         // update states
         reserve.updateState(getTreasury());
+        //@audit-info is rounding down and hence earising the borrow possible?
         updateDebtPosition(debtPosition, reserve.borrowingIndex);
 
         // only vaultPositionManager contract has credits to borrow tokens
@@ -458,6 +508,8 @@ contract LendingPool is ILendingPool, Ownable, Payments, ReentrancyGuard {
         if (amount > debtPosition.borrowed) {
             amount = debtPosition.borrowed;
         }
+
+        //is it possible for reserve.totalBorrows to be <= total(borrowed)?
         reserve.totalBorrows = reserve.totalBorrows.sub(amount);
         debtPosition.borrowed = debtPosition.borrowed.sub(amount);
 
@@ -514,7 +566,7 @@ contract LendingPool is ILendingPool, Ownable, Payments, ReentrancyGuard {
         debtPosition.borrowed = debtPosition
             .borrowed
             .mul(latestBorrowingIndex)
-            .div(debtPosition.borrowedIndex);
+            .div(debtPosition.borrowedIndex); //rounds down
 
         debtPosition.borrowedIndex = latestBorrowingIndex;
     }
@@ -535,12 +587,15 @@ contract LendingPool is ILendingPool, Ownable, Payments, ReentrancyGuard {
         reserve.borrowingRateConfig.borrowingRateA = uint128(
             Precision.FACTOR1E18.mul(borrowingRateA).div(Constants.PERCENT_100)
         );
+
         reserve.borrowingRateConfig.utilizationB = uint128(
             Precision.FACTOR1E18.mul(utilizationB).div(Constants.PERCENT_100)
         );
+
         reserve.borrowingRateConfig.borrowingRateB = uint128(
             Precision.FACTOR1E18.mul(borrowingRateB).div(Constants.PERCENT_100)
         );
+
         reserve.borrowingRateConfig.maxBorrowingRate = uint128(
             Precision.FACTOR1E18.mul(maxBorrowingRate).div(
                 Constants.PERCENT_100
@@ -632,8 +687,8 @@ contract LendingPool is ILendingPool, Ownable, Payments, ReentrancyGuard {
         ];
 
         latestBorrowingIndex = reserve.latestBorrowingIndex();
-        currentDebt = debtPosition.borrowed.mul(latestBorrowingIndex).div(
-            debtPosition.borrowedIndex
+        currentDebt = debtPosition.borrowed.mul(latestBorrowingIndex).div( //currentBorrowIndex
+            debtPosition.borrowedIndex //previous borrowIndex
         );
     }
 
@@ -695,6 +750,25 @@ contract LendingPool is ILendingPool, Ownable, Payments, ReentrancyGuard {
         (, totalBorrows) = reserve.totalLiquidityAndBorrows();
     }
 
+    function getTotalBorrwedReserve(uint reserveId) public view returns (uint) {
+        DataTypes.ReserveData storage reserve = reserves[reserveId];
+        return reserve.borrowedLiquidity();
+    }
+
+    function getLatestBorrowingIndex(
+        uint reserveId
+    ) public view returns (uint) {
+        DataTypes.ReserveData storage reserve = reserves[reserveId];
+        return reserve.latestBorrowingIndex();
+    }
+
+    function getTotalAvailableReserve(
+        uint reserveId
+    ) public view returns (uint) {
+        DataTypes.ReserveData storage reserve = reserves[reserveId];
+        return reserve.availableLiquidity();
+    }
+
     //----------------->>>>>  Set with Admin <<<<<-----------------
     function emergencyPauseAll() external onlyOwner {
         paused = true;
@@ -723,13 +797,11 @@ contract LendingPool is ILendingPool, Ownable, Payments, ReentrancyGuard {
     }
 
     function setCreditsOfVault(
-        uint256 vaultId,
+        address _vault,
         uint256 reserveId,
         uint256 credit
     ) external onlyOwner notPaused {
-        address vaultAddr = getVault(vaultId);
-        credits[reserveId][vaultAddr] = credit;
-        emit SetCreditsOfVault(vaultId, vaultAddr, reserveId, credit);
+        credits[reserveId][_vault] = credit;
     }
 
     function activateReserve(uint256 reserveId) public onlyOwner notPaused {
@@ -776,7 +848,6 @@ contract LendingPool is ILendingPool, Ownable, Payments, ReentrancyGuard {
         require(_rate <= Constants.PERCENT_100, "invalid percent");
         DataTypes.ReserveData storage reserve = reserves[reserveId];
         reserve.reserveFeeRate = _rate;
-
         emit SetReserveFeeRate(reserveId, _rate);
     }
 
@@ -813,7 +884,6 @@ contract LendingPool is ILendingPool, Ownable, Payments, ReentrancyGuard {
         uint256 cap
     ) public onlyOwner notPaused {
         DataTypes.ReserveData storage reserve = reserves[reserveId];
-
         reserve.reserveCapacity = cap;
         emit SetReserveCapacity(reserveId, cap);
     }

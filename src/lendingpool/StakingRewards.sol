@@ -80,6 +80,7 @@ contract StakingRewards is Ownable, IStakingRewards {
             return rewardData[rewardToken].rewardPerTokenStored;
         }
 
+        //@audit-info get the distance since last update
         uint256 dt = Math.min(
             rewardData[rewardToken].endTime,
             block.timestamp
@@ -135,13 +136,14 @@ contract StakingRewards is Ownable, IStakingRewards {
         rewardData[rewardToken].startTime = startTime;
         rewardData[rewardToken].endTime = endTime;
         rewardData[rewardToken].lastUpdateTime = block.timestamp;
-        rewardData[rewardToken].rewardRate =
+        rewardData[rewardToken].rewardRate = //token per second
             totalRewards /
             (endTime - startTime);
 
         if (block.timestamp > startTime && totalStaked > 0) {
             uint256 dt = block.timestamp - startTime;
 
+            //@audit-info some reward tokens may not have 18 decimals?
             rewardData[rewardToken].rewardPerTokenStored +=
                 (rewardData[rewardToken].rewardRate * dt * 1e18) /
                 totalStaked;
@@ -232,6 +234,7 @@ contract StakingRewards is Ownable, IStakingRewards {
             uint256 claimable = userRewardsClaimable[msg.sender][rewardToken];
             if (claimable > 0) {
                 userRewardsClaimable[msg.sender][rewardToken] = 0;
+                //@audit-info use safeTransfer, some reward tokens may not support this
                 require(
                     IERC20(rewardToken).transfer(msg.sender, claimable),
                     "transfer failed"

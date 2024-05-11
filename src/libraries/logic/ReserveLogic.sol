@@ -50,9 +50,11 @@ library ReserveLogic {
         DataTypes.ReserveData storage reserve
     ) internal view returns (uint256 liquidity) {
         liquidity = latestBorrowingIndex(reserve).mul(reserve.totalBorrows).div(
-            reserve.borrowingIndex
-        );
+                reserve.borrowingIndex
+            );
     }
+
+    //U = borrows / (available - reserve)
 
     /**
      * @dev Get the utilization of the reserve.
@@ -98,6 +100,7 @@ library ReserveLogic {
         if (totalETokens == 0 || totalLiquidity == 0) {
             return Precision.FACTOR1E18;
         }
+
         return totalETokens.mul(Precision.FACTOR1E18).div(totalLiquidity);
     }
 
@@ -112,9 +115,11 @@ library ReserveLogic {
         (uint256 totalLiquidity, ) = totalLiquidityAndBorrows(reserve);
         uint256 totalETokens = IERC20(reserve.eTokenAddress).totalSupply();
 
+        //@audit-info in what cases can this happen?
         if (totalETokens == 0 || totalLiquidity == 0) {
             return Precision.FACTOR1E18;
         }
+
         return totalLiquidity.mul(Precision.FACTOR1E18).div(totalETokens);
     }
 
@@ -126,7 +131,7 @@ library ReserveLogic {
     function latestBorrowingIndex(
         DataTypes.ReserveData storage reserve
     ) internal view returns (uint256) {
-        if (reserve.lastUpdateTimestamp == uint128(block.timestamp)) {
+        if (reserve.lastUpdateTimestamp >= uint128(block.timestamp)) {
             //if the index was updated in the same block, no need to perform any calculation
             return reserve.borrowingIndex;
         }
@@ -163,9 +168,10 @@ library ReserveLogic {
         DataTypes.ReserveData storage reserve,
         address treasury
     ) internal {
-        uint256 previousDebt = reserve.totalBorrows;
+        uint256 previousDebt = reserve.totalBorrows; //80 ether
         _updateIndexes(reserve);
-
+        
+        //@audit is it possible if reserve.totalBorrows < previousDebt?
         _mintToTreasury(reserve, previousDebt, reserve.totalBorrows, treasury);
     }
 
@@ -187,10 +193,12 @@ library ReserveLogic {
      * @param reserve The reserve object
      **/
     function _updateIndexes(DataTypes.ReserveData storage reserve) internal {
-        uint256 newBorrowingIndex = reserve.borrowingIndex;
-        uint256 newTotalBorrows = reserve.totalBorrows;
+        uint256 newBorrowingIndex = reserve.borrowingIndex; //1 ether
+        uint256 newTotalBorrows = reserve.totalBorrows;// 80 ether
 
+        //update the total borrow according to the interest rates
         if (reserve.totalBorrows > 0) {
+            //@audit-info calculate new borrowing index using compounded interest
             newBorrowingIndex = latestBorrowingIndex(reserve);
             newTotalBorrows = newBorrowingIndex.mul(reserve.totalBorrows).div(
                 reserve.borrowingIndex
@@ -214,6 +222,7 @@ library ReserveLogic {
      * @param previousDebt The previous debt
      * @param currentDebt The current debt
      **/
+     //@audit-info is fee excluded
     function _mintToTreasury(
         DataTypes.ReserveData storage reserve,
         uint256 previousDebt,
@@ -227,16 +236,20 @@ library ReserveLogic {
         }
 
         //debt accrued is the current debt minus the debt at the last update
+        //note total new borrows
         uint256 totalDebtAccrued = currentDebt.sub(previousDebt);
+        //note get a poriton as fee
         uint256 reserveValueAccrued = totalDebtAccrued.mul(feeRate).div(
             Constants.PERCENT_100
         );
         // reserve value to eTokens
         uint256 exchangeRate = reserveToETokenExchangeRate(reserve);
+        //note convert to Etoken
         uint256 feeInEToken = reserveValueAccrued.mul(exchangeRate).div(
             Precision.FACTOR1E18
         );
-
+        
+        //note mint eTokens to treasury
         if (feeInEToken != 0) {
             IExtraInterestBearingToken(reserve.eTokenAddress).mintToTreasury(
                 treasury,

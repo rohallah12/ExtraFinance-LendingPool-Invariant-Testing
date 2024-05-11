@@ -111,14 +111,14 @@ library InterestRateUtils {
             Precision.FACTOR1E18
         );
 
-        uint256 secondTerm = exp.mul(expMinusOne).mul(basePowerTwo) / 2;
+        uint256 secondTerm = exp.mul(expMinusOne).mul(basePowerTwo) / 2; 
         uint256 thirdTerm = exp.mul(expMinusOne).mul(expMinusTwo).mul(
             basePowerThree
-        ) / 6;
+        ) / 6; //0
 
         return
             (Precision.FACTOR1E18)
-                .add(ratePerSecond.mul(exp))
+                .add(ratePerSecond.mul(exp))//
                 .add(secondTerm)
                 .add(thirdTerm);
     }
